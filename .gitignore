@@ -11,7 +11,3 @@ __pycache__/
 # Jupyter
 .ipynb_checkpoints/
 
-# Data (ignore all files in data/ but keep the folder + these files)
-data/*
-!data/.gitkeep
-!data/.gitignore
