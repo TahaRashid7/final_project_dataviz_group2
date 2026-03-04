@@ -50,7 +50,6 @@ def load_debt_by_ward():
 
 @st.cache_data
 def load_demolitions_by_ward():
-    # Try pre-aggregated summary first, fall back to full geocoded file
     summary_path = BASE / "dataset" / "cleaned" / "ward_demolition_summary.csv"
     detail_path  = BASE / "dataset" / "cleaned" / "demolition_with_ward.csv"
 
@@ -64,7 +63,6 @@ def load_demolitions_by_ward():
             city_initiated=("is_city_initiated", "sum")
         ).reset_index()
     else:
-        st.warning("Missing demolition data — add ward_demolition_summary.csv or demolition_with_ward.csv to dataset/cleaned/")
         return pd.DataFrame(columns=["ward", "total_demolitions", "city_initiated"])
 
     demo["ward"]              = demo["ward"].astype(int)
@@ -75,13 +73,13 @@ def load_demolitions_by_ward():
 # -----------------------------
 # LOAD DATA
 # -----------------------------
-gdf = load_wards_geo()
-vacant = load_vacant_csv()
-ts = load_foreclosures_timeseries()
+gdf                         = load_wards_geo()
+vacant                      = load_vacant_csv()
+ts                          = load_foreclosures_timeseries()
 debt_long, ward_debt_totals = load_debt_by_ward()
-ward_demo = load_demolitions_by_ward()
+ward_demo                   = load_demolitions_by_ward()
 
-# -- WATER DEBT CALCULATION --
+# Water debt calculation
 water_categories = ["Water (Service)", "Water Penalty", "Water Tax (Service)", "Water Tax Penalty"]
 water_debt = (
     debt_long[debt_long["category"].isin(water_categories)]
@@ -91,20 +89,19 @@ water_debt = (
     .rename(columns={"amount_m": "Water Debt ($M)"})
 )
 
-# -- MERGE DATA --
+# Merge
 gdf = gdf.merge(ward_debt_totals, on="ward", how="left")
 gdf = gdf.merge(water_debt, on="ward", how="left")
-
 if not ward_demo.empty:
     gdf = gdf.merge(ward_demo[["ward", "total_demolitions"]], on="ward", how="left")
 else:
     gdf["total_demolitions"] = 0
 
-gdf["total_debt_m"]    = gdf["total_debt_m"].fillna(0)
-gdf["Water Debt ($M)"] = gdf["Water Debt ($M)"].fillna(0) 
+gdf["total_debt_m"]      = gdf["total_debt_m"].fillna(0)
+gdf["Water Debt ($M)"]   = gdf["Water Debt ($M)"].fillna(0)
 gdf["total_demolitions"] = gdf["total_demolitions"].fillna(0)
 
-# Recompute Housing Distress Index with debt as third component
+# Recompute Housing Distress Index (foreclosure + vacancy + debt, normalized)
 def normalize(s):
     mn, mx = s.min(), s.max()
     return (s - mn) / (mx - mn) if mx > mn else s * 0
@@ -179,11 +176,10 @@ else:
 # -----------------------------
 # MAP
 # -----------------------------
-
 hover_cols = [
     "ward", "Foreclosures (2024)", "Vacant parcels",
-    "Housing Distress Index", "Outstanding Debt ($M)", 
-    "Water Debt ($M)", "Demolitions", "risk_tier" 
+    "Housing Distress Index", "Outstanding Debt ($M)",
+    "Water Debt ($M)", "Demolitions", "risk_tier"
 ]
 
 color_scales = {
@@ -294,6 +290,7 @@ if not ward_demo.empty:
     st.subheader("Demolition Permits — City-Initiated vs. Private")
 
     if selected_ward == "Citywide":
+        # Stacked bar for citywide top 20
         demo_plot = ward_demo.sort_values("total_demolitions", ascending=False).head(20).copy()
         demo_plot["ward"]    = demo_plot["ward"].astype(str)
         demo_plot["private"] = demo_plot["total_demolitions"] - demo_plot["city_initiated"]
@@ -304,31 +301,48 @@ if not ward_demo.empty:
         demo_long["type"] = demo_long["type"].map({
             "city_initiated": "City-Initiated", "private": "Private"
         })
-        x_demo     = "ward"
-        title_demo = "Top 20 Wards — Demolition Permits by Type"
-    else:
-        wr = ward_demo[ward_demo["ward"] == selected_ward]
-        if not wr.empty:
-            r = wr.iloc[0]
-            demo_long = pd.DataFrame({
-                "type":  ["City-Initiated", "Private"],
-                "count": [int(r["city_initiated"]),
-                          int(r["total_demolitions"]) - int(r["city_initiated"])]
-            })
-            x_demo     = "type"
-            title_demo = f"Ward {selected_ward} — Demolition Permits by Type"
-        else:
-            demo_long = None
-
-    if demo_long is not None:
         fig_demo = px.bar(
-            demo_long, x=x_demo, y="count", color="type", barmode="stack",
+            demo_long, x="ward", y="count", color="type", barmode="stack",
             color_discrete_map={"City-Initiated": "#3b82f6", "Private": "#94a3b8"},
             labels={"count": "Demolition Permits", "ward": "Ward", "type": "Type"},
-            title=title_demo
+            title="Top 20 Wards — Demolition Permits by Type"
         )
         fig_demo.update_layout(
             margin={"r": 0, "t": 40, "l": 0, "b": 0},
             xaxis=dict(type="category"),
         )
         st.plotly_chart(fig_demo, use_container_width=True)
+
+    else:
+        # Donut chart for single ward
+        wr = ward_demo[ward_demo["ward"] == selected_ward]
+        if not wr.empty:
+            r           = wr.iloc[0]
+            city_n      = int(r["city_initiated"])
+            private_n   = int(r["total_demolitions"]) - city_n
+            total_n     = int(r["total_demolitions"])
+
+            fig_demo = go.Figure(data=[go.Pie(
+                labels=["City-Initiated", "Private"],
+                values=[city_n, private_n],
+                hole=0.5,
+                marker_colors=["#3b82f6", "#94a3b8"],
+                textinfo="label+percent",
+                textfont=dict(size=13),
+                hovertemplate="%{label}: %{value} permits (%{percent})<extra></extra>"
+            )])
+            fig_demo.update_layout(
+                title=f"Ward {selected_ward} — Demolitions by Type ({total_n:,} total)",
+                margin={"r": 20, "t": 50, "l": 20, "b": 20},
+                showlegend=True,
+                legend=dict(orientation="h", x=0.3, y=-0.1),
+                annotations=[dict(
+                    text=f"<b>{total_n:,}</b><br>total",
+                    x=0.5, y=0.5,
+                    font_size=16,
+                    showarrow=False
+                )]
+            )
+            st.plotly_chart(fig_demo, use_container_width=True)
+        else:
+            st.info(f"No demolition data available for Ward {selected_ward}.")
