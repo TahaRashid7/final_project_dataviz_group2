@@ -1,0 +1,13 @@
+name: Keep Streamlit App Alive
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+jobs:
+  ping-apps:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping ward-level-debt
+        run: curl -s -o /dev/null -w "%{http_code}\n" https://ward-level-debt.streamlit.app/
